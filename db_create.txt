@@ -1,0 +1,114 @@
+-- =============================================================================
+-- 1. DROP EXISTING TABLES (Clean Reset Order)
+-- =============================================================================
+DROP TABLE IF EXISTS listacekanja CASCADE;
+DROP TABLE IF EXISTS recenzije CASCADE;
+DROP TABLE IF EXISTS klijentbiljeska CASCADE;
+DROP TABLE IF EXISTS rezervacije CASCADE;
+DROP TABLE IF EXISTS radnovrijeme CASCADE;
+DROP TABLE IF EXISTS usluge CASCADE;
+DROP TABLE IF EXISTS korisnici CASCADE;
+DROP TABLE IF EXISTS statusrezervacija CASCADE;
+DROP TABLE IF EXISTS korisnickarola CASCADE;
+
+-- =============================================================================
+-- 2. LOOKUP DATA TABLES (Your ERDplus Enum Tables)
+-- =============================================================================
+CREATE TABLE korisnickarola (
+    id SERIAL PRIMARY KEY,
+    naziv VARCHAR(50) NOT NULL UNIQUE
+);
+
+CREATE TABLE statusrezervacija (
+    id SERIAL PRIMARY KEY,
+    naziv VARCHAR(50) NOT NULL UNIQUE
+);
+
+-- Seed static lookup dependencies immediately
+INSERT INTO korisnickarola (naziv) VALUES ('ADMIN'), ('CUSTOMER');
+INSERT INTO statusrezervacija (naziv) VALUES ('PENDING'), ('CONFIRMED'), ('CANCELLED');
+
+-- =============================================================================
+-- 3. CORE MASTER ENTITIES (No Transactional Foreign Keys)
+-- =============================================================================
+CREATE TABLE korisnici (
+    id SERIAL PRIMARY KEY,
+    ime VARCHAR(100) NOT NULL,
+    prezime VARCHAR(100) NOT NULL,
+    broj_mobitela VARCHAR(50) UNIQUE, -- Mandatory for admin-created profiles
+    email VARCHAR(255) UNIQUE,        -- Optional (NULL)
+    username VARCHAR(100) UNIQUE,     -- Optional (NULL) for admin-created walk-ins
+    password_hash VARCHAR(255),       -- Optional (NULL) for admin-created walk-ins
+    rola_id INT NOT NULL REFERENCES korisnickarola(id) DEFAULT 2
+);
+
+CREATE TABLE usluge (
+    id SERIAL PRIMARY KEY,
+    naziv VARCHAR(150) NOT NULL UNIQUE,
+    trajanje INT NOT NULL CHECK (trajanje > 0), -- Duration tracking in minutes
+    cijena DECIMAL(10, 2) NOT NULL CHECK (cijena >= 0.00)
+);
+
+-- =============================================================================
+-- 4. TIMESTAMP SCHEDULING & TRANSACTION LEDGERS
+-- =============================================================================
+
+-- Table: RADNOVRIJEME (Uses full timestamps for dynamic shift boundaries)
+CREATE TABLE radnovrijeme (
+    id SERIAL PRIMARY KEY,
+    vrijeme_od TIMESTAMP WITH TIME ZONE NOT NULL,
+    vrijeme_do TIMESTAMP WITH TIME ZONE NOT NULL,
+    CONSTRAINT provjera_smjene CHECK (vrijeme_do > vrijeme_od)
+);
+
+-- Table: REZERVACIJE (Uses full timestamps - No redundant datum column needed)
+CREATE TABLE rezervacije (
+    id SERIAL PRIMARY KEY,
+    pocetak TIMESTAMP WITH TIME ZONE NOT NULL,
+    kraj TIMESTAMP WITH TIME ZONE NOT NULL,
+    biljeska TEXT, -- Optional intake note logged DURING booking step
+    usluga_id INT NOT NULL REFERENCES usluge(id) ON DELETE RESTRICT,
+    klijent_id INT NOT NULL REFERENCES korisnici(id) ON DELETE CASCADE,
+    status_id INT NOT NULL REFERENCES statusrezervacija(id) DEFAULT 1,
+    CONSTRAINT provjera_trajanja CHECK (kraj > pocetak)
+);
+
+-- =============================================================================
+-- 5. FUNCTIONAL EXTENSIONS (Strict 1:1 & Notification Queues)
+-- =============================================================================
+
+-- Table: KLIJENTBILJESKA (Strict 1:1 Note Connection)
+CREATE TABLE klijentbiljeska (
+    id SERIAL PRIMARY KEY,
+    text TEXT NOT NULL,
+    rezervacija_id INT NOT NULL REFERENCES rezervacije(id) ON DELETE CASCADE UNIQUE
+);
+
+-- Table: RECENZIJE (Verified Purchase Layout with Denormalization Strategy)
+CREATE TABLE recenzije (
+    id SERIAL PRIMARY KEY,
+    ocjena INT NOT NULL CHECK (ocjena BETWEEN 1 AND 5),
+    komentar TEXT,
+    rezervacija_id INT NOT NULL REFERENCES rezervacije(id) ON DELETE CASCADE UNIQUE,
+    usluga_id INT NOT NULL REFERENCES usluge(id) ON DELETE CASCADE,
+    klijent_id INT NOT NULL REFERENCES korisnici(id) ON DELETE CASCADE
+);
+
+-- Table: LISTACEKANJA (Uses full timestamps for matching window targets)
+CREATE TABLE listacekanja (
+    id SERIAL PRIMARY KEY,
+    vrijeme_od TIMESTAMP WITH TIME ZONE NOT NULL,
+    vrijeme_do TIMESTAMP WITH TIME ZONE NOT NULL,
+    obavijesten BOOLEAN DEFAULT FALSE,
+    usluga_id INT NOT NULL REFERENCES usluge(id) ON DELETE CASCADE,
+    klijent_id INT NOT NULL REFERENCES korisnici(id) ON DELETE CASCADE,
+    CONSTRAINT provjera_cekanja CHECK (vrijeme_do > vrijeme_od)
+);
+
+-- =============================================================================
+-- 6. SYSTEM PERFORMANCE OPTIMIZATION INDEXES
+-- =============================================================================
+CREATE INDEX idx_radno_vrijeme_raspon ON radnovrijeme(vrijeme_od, vrijeme_do);
+CREATE INDEX idx_aktivne_rezervacije ON rezervacije(pocetak, kraj, status_id) WHERE status_id IN (1, 2);
+CREATE INDEX idx_red_cekanja_aktivno ON listacekanja(vrijeme_od, obavijesten) WHERE obavijesten = FALSE;
+CREATE INDEX idx_brzo_grupisanje_recenzija ON recenzije(usluga_id, ocjena);

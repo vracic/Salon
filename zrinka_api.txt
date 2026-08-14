@@ -1,0 +1,461 @@
+================================================================================
+SECTION 1: AUTHENTICATION, REGISTRATION & USER ROLES
+================================================================================
+
+1.1 POST /api/auth/register
+--------------------------------------------------------------------------------
+- Who uses it: Public customers signing up via the website or mobile shortcut.
+- Rules: 'ime', 'prezime', 'broj_mobitela', 'username', and 'password' are 
+  strictly mandatory. 'email' is completely optional and can be sent empty. 
+  Password hashing occurs exclusively on the backend before insertion.
+- UX Features: Performs an automatic login right after registration. It returns 
+  the 'username' and 'ime' instantly so the frontend can display a personalized 
+  welcome message: "Registracija uspješna, dobrodošao/la [username]!"
+
+- Frontend Request Payload:
+{
+  "ime": "Ana",
+  "prezime": "Kovačić",
+  "broj_mobitela": "+385915556666",
+  "username": "anakovacic",
+  "password": "my_secure_password",
+  "email": "" 
+}
+
+- Backend Response (201 Created):
+{
+  "status": "success",
+  "poruka": "Registracija uspješna.",
+  "token": "eyJhbGciOi...", 
+  "rola": "CUSTOMER",
+  "username": "anakovacic",
+  "ime": "Ana"
+}
+
+1.2 POST /api/auth/login
+--------------------------------------------------------------------------------
+- Who uses it: Registered users (Admins or Customers).
+- Rules: The database strictly queries and validates by matching the 'username'.
+
+- Frontend Request Payload:
+{
+  "username": "anakovacic",
+  "password": "my_secure_password"
+}
+
+- Backend Response (200 OK):
+{
+  "token": "eyJhbGciOi...",
+  "rola": "CUSTOMER", // Or 'ADMIN'
+  "username": "anakovacic",
+  "ime": "Ana"
+}
+
+1.3 POST /api/korisnici/klijent
+--------------------------------------------------------------------------------
+- Who uses it: Admin only (for over-the-phone or walk-in customers).
+- Rules: 'broj_mobitela' is strictly mandatory here. 'username', 'email', 
+  and 'password_hash' remain completely empty (NULL) in the database. This allows 
+  the admin to create accounts on the fly without making up fake user credentials.
+
+- Frontend Request Payload:
+{
+  "ime": "Ivan",
+  "prezime": "Horvat",
+  "broj_mobitela": "+385919998888",
+  "email": "" 
+}
+
+- Backend Response (201 Created):
+{
+  "status": "success",
+  "klijent_id": 42, // The foreign key ID the admin needs to assign the calendar booking
+  "poruka": "Brzi profil klijenta uspješno kreiran."
+}
+
+1.4 PATCH /api/korisnici/{id}/rola
+--------------------------------------------------------------------------------
+- Who uses it: Admin only.
+- Rules: Modifies only the 'rola_id' column on a user record (1 = ADMIN, 2 = CUSTOMER).
+
+- Frontend Request Payload:
+{
+  "rola_id": 1 
+}
+
+- Backend Response (200 OK):
+{
+  "status": "success",
+  "poruka": "Korisnička uloga uspješno promijenjena."
+}
+
+================================================================================
+SECTION 2: ADMIN SHIFTS, GRID MATRIX & FRONTEND CALCULATIONS
+================================================================================
+
+2.1 PUT /api/radnovrijeme/dan
+--------------------------------------------------------------------------------
+- Who uses it: Admin only.
+- Rules: Sets custom working shift windows for a specific date. Supports 
+  multiple entries per day to handle split-shifts natively.
+- Strict Safety Check (Option 1): Before editing, the backend queries active 
+  'rezervacije' for that date. If any existing appointment falls outside the 
+  new boundaries, the database transaction is aborted, the operation is blocked, 
+  and a 400 error is returned detailing the conflict so the admin can handle it manually.
+
+- Frontend Request Payload:
+{
+  "datum": "2026-08-25",
+  "smjene": [
+    { "vrijeme_od": "2026-08-25T08:00:00Z", "vrijeme_do": "2026-08-25T12:00:00Z" },
+    { "vrijeme_od": "2026-08-25T16:00:00Z", "vrijeme_do": "2026-08-25T20:00:00Z" }
+  ]
+}
+
+- Backend Success Response (200 OK):
+{
+  "status": "success",
+  "poruka": "Raspored za izabrani dan je uspješno ažuriran."
+}
+
+- Backend Conflict Error Response (400 Bad Request):
+{
+  "status": "error",
+  "poruka": "Nemoguće ažurirati radno vrijeme. Postojeći termini ne staju u nove smjene.",
+  "konfliktne_rezervacije": [
+    {
+      "id": 101,
+      "klijent_ime": "Ivan Horvat",
+      "pocetak": "2026-08-25T14:00:00Z",
+      "kraj": "2026-08-25T15:00:00Z"
+    }
+  ]
+}
+
+2.2 GET /api/rezervacije/slobodni-termini?datum={YYYY-MM-DD}
+--------------------------------------------------------------------------------
+- Who uses it: Public customers navigating the scheduling view.
+- Changes made: Removed 'usluga_id' from the query parameters because we want to 
+  fetch ALL availability parameters for that date up front.
+- UI & Engine Feature: Returns three critical sets of data in a single response:
+  1. 'radno_vrijeme': The shift bounds (so the UI can draw the workday/grey zones).
+  2. 'slobodni_pocetci': All raw available 15-minute start points.
+  3. 'usluge': The full catalog with durations, allowing your TypeScript frontend 
+     to instantly calculate time gaps and apply the 'disabled' tag property to 
+     services that exceed the remaining time window.
+
+- Backend Response (200 OK):
+{
+  "radno_vrijeme": [
+    { "vrijeme_od": "2026-08-25T08:00:00Z", "vrijeme_do": "2026-08-25T12:00:00Z" },
+    { "vrijeme_od": "2026-08-25T16:00:00Z", "vrijeme_do": "2026-08-25T20:00:00Z" }
+  ],
+  "slobodni_pocetci": [
+    "2026-08-25T08:00:00Z",
+    "2026-08-25T08:15:00Z",
+    "2026-08-25T11:45:00Z",
+    "2026-08-25T16:00:00Z"
+  ],
+  "usluge": [
+    {
+      "id": 1,
+      "naziv": "Express Nokti",
+      "trajanje": 15,
+      "cijena": 15.00
+    },
+    {
+      "id": 2,
+      "naziv": "Masaža Cijelog Tijela",
+      "trajanje": 60,
+      "cijena": 40.00
+    }
+  ]
+}
+
+2.3 GET /api/usluge
+--------------------------------------------------------------------------------
+- Who uses it: Everyone. Fetches your raw catalog details.
+- Frontend Calculation Engine: When a user clicks a free 15-minute chunk 
+  (e.g., 11:30 AM), your TypeScript script looks ahead to find the maximum open gap 
+  remaining before either a shift ends or an existing slot cuts it off. The frontend 
+  checks this 'trajanje' matrix and dynamically sets the 'disabled' tag property 
+  on any dropdown choice that exceeds that gap.
+
+- Backend Response (200 OK):
+[
+  {
+    "id": 1,
+    "naziv": "Express Nokti",
+    "trajanje": 15,
+    "cijena": 15.00
+  },
+  {
+    "id": 2,
+    "naziv": "Masaža Cijelog Tijela",
+    "trajanje": 60,
+    "cijena": 40.00
+  }
+]
+
+2.4 POST /api/usluge
+--------------------------------------------------------------------------------
+- Who uses it: Admin only (CREATE).
+- Rules: Adds a new treatment to the catalog. 'naziv' must be unique. 
+  'trajanje' must be a multiple of 15 minutes to stay perfectly synchronized 
+  with the appointment matrix grid constraints.
+
+- Frontend Request Payload:
+{
+  "naziv": "Pedikura",
+  "trajanje": 45,
+  "cijena": 25.00
+}
+
+- Backend Response (201 Created):
+{
+  "status": "success",
+  "usluga_id": 3,
+  "poruka": "Usluga uspješno kreirana."
+}
+
+2.5 PUT /api/usluge/{id}
+--------------------------------------------------------------------------------
+- Who uses it: Admin only (UPDATE).
+- Rules: Replaces the entire definition of an existing treatment entry.
+
+- Frontend Request Payload:
+{
+  "naziv": "Pedikura Premium",
+  "trajanje": 45,
+  "cijena": 30.00
+}
+
+- Backend Response (200 OK):
+{
+  "status": "success",
+  "poruka": "Usluga uspješno izmijenjena."
+}
+
+2.6 DELETE /api/usluge/{id}
+--------------------------------------------------------------------------------
+- Who uses it: Admin only (DELETE).
+- Strict Safety Check: Due to the `ON DELETE RESTRICT` constraint established 
+  in your database schema, the database will automatically block this deletion 
+  if there are any active upcoming appointments tied to this service. The admin 
+  must cancel or modify those bookings first before removing the treatment option.
+
+- Backend Success Response (200 OK):
+{
+  "status": "success",
+  "poruka": "Usluga uspješno obrisana iz kataloga."
+}
+
+- Backend Failure Response (400 Bad Request):
+{
+  "status": "error",
+  "poruka": "Nemoguće obrisati uslugu. Postoje aktivne rezervacije vezane za ovaj tretman."
+}
+================================================================================
+
+================================================================================
+SECTION 3: THE BOOKINGS ENGINE LIFECYCLE
+================================================================================
+
+3.1 POST /api/rezervacije
+--------------------------------------------------------------------------------
+- Who uses it: Everyone (Both Customers and Admins).
+- Core Engine Logic: Every request must select a predefined service from the dropdown.
+  The server looks up 'trajanje' from the USLUGE table and automatically computes the 
+  'kraj' timestamp by adding those minutes to 'pocetak'.
+- Role Split Behavior:
+  - If a Customer: The server performs strict calculations. It ensures 'pocetak' and 'kraj' 
+    fit inside RADNOVRIJEME shifts, checks for overlaps against existing rows, and 
+    inserts it with a status_id matching 'PENDING' from STATUSREZERVACIJA.
+  - If an Admin: The server computes 'kraj' but skips all shift boundary and double-booking 
+    restriction queries to force the slot instantly, saving it directly as 'CONFIRMED'.
+- Optional intake note ('biljeska') can be attached during this step.
+
+- Frontend Request Payload:
+{
+  "klijent_id": 42,
+  "usluga_id": 1,
+  "pocetak": "2026-08-25T09:00:00Z",
+  "biljeska": "Molim vas nemojte kasniti, parking je ograničen." 
+}
+
+- Backend Response (201 Created):
+{
+  "status": "success",
+  "rezervacija_id": 501,
+  "poruka": "Termin uspješno zabilježen."
+}
+
+3.2 GET /api/rezervacije/moje
+--------------------------------------------------------------------------------
+- Who uses it: Logged-in customers.
+- Rules: The backend securely reads the user's account ID directly from the decoded 
+  incoming JWT cryptographic header. It returns a clean, scannable list layout of 
+  their personal profile appointment timeline.
+- Frontend Context Helpers: The backend dynamically computes and attaches two 
+  boolean helper flags ('can_cancel' and 'can_review'). This lets your Vanilla 
+  TypeScript frontend easily toggle active action buttons on individual list cards 
+  without writing complex frontend validation logic.
+
+- Backend Response (200 OK):
+[
+  {
+    "id": 501,
+    "usluga_naziv": "Express Nokti",
+    "cijena": 15.00,
+    "pocetak": "2026-08-25T09:00:00Z",
+    "kraj": "2026-08-25T09:15:00Z",
+    "status": "CONFIRMED",
+    "biljeska": "Molim vas nemojte kasniti...",
+    "can_cancel": true,  // Future appointment = Cancel button is rendered active
+    "can_review": false  // Has not happened yet = Leave Review button is hidden
+  },
+  {
+    "id": 320,
+    "usluga_naziv": "Masaža Leđa",
+    "cijena": 30.00,
+    "pocetak": "2026-07-10T14:00:00Z",
+    "kraj": "2026-07-10T14:45:00Z",
+    "status": "CONFIRMED",
+    "biljeska": null,
+    "can_cancel": false, // Past appointment = Cancel button disabled
+    "can_review": true   // Completed past treatment = Triggers verified review form modal
+  }
+]
+
+3.3 GET /api/rezervacije/admin-pregled?datum={YYYY-MM-DD}
+--------------------------------------------------------------------------------
+- Who uses it: Admin only.
+- Rules: Fetches all appointments across the system for a specific date to populate 
+  the main back-office dashboard management list. Returns full client identity 
+  context details (including the mandatory 'broj_mobitela' for phone lookup context).
+
+- Backend Response (200 OK):
+[
+  {
+    "id": 501,
+    "pocetak": "2026-08-25T09:00:00Z",
+    "kraj": "2026-08-25T09:15:00Z",
+    "usluga_naziv": "Express Nokti",
+    "status": "CONFIRMED",
+    "biljeska": "Molim vas nemojte kasniti...",
+    "klijent": {
+      "id": 42,
+      "ime": "Ivan",
+      "prezime": "Horvat",
+      "broj_mobitela": "+385919998888"
+    }
+  }
+]
+
+3.4 PATCH /api/rezervacije/{id}/status
+--------------------------------------------------------------------------------
+- Who uses it: Everyone (Admin approving/cancelling or Customer cancelling).
+- Why PATCH: We use PATCH because it targets and updates only a single property 
+  ('status_id') on the specific booking row without rewriting dates or services.
+- Queue Chain Reaction Trigger: If the incoming request sets the 'status_id' to 
+  3 (which is 'CANCELLED' in your statusrezervacija table), the backend completes 
+  the status update and instantly launches the background database scan on the 
+  LISTACEKANJA table to alert matching customers that a slot has opened.
+
+- Frontend Request Payload:
+{
+  "status_id": 3 // 1 = PENDING, 2 = CONFIRMED, 3 = CANCELLED
+}
+
+- Backend Response (200 OK):
+{
+  "status": "success",
+  "poruka": "Status rezervacije uspješno ažuriran."
+}
+================================================================================
+
+
+================================================================================
+SECTION 4: POST-TREATMENT & QUEUE NOTIFICATIONS
+================================================================================
+
+4.1 POST /api/biljeske
+--------------------------------------------------------------------------------
+- Who uses it: Admin only.
+- Rules: Enforces a strict 1:1 data record linked directly to 'rezervacija_id'. 
+  You do NOT send 'klijent_id' here; the backend reads the 'rezervacija_id', pulls 
+  the client identity internally from the bookings table, and saves the note securely.
+
+- Frontend Request Payload:
+{
+  "rezervacija_id": 320,
+  "text": "Klijentica preferira crveni lak broj #4. Izbjegavati prejak pritisak na kožicu."
+}
+
+- Backend Response (201 Created):
+{
+  "status": "success",
+  "poruka": "Administrativna bilješka spremljena."
+}
+
+4.2 GET /api/korisnici/{id}/povijest-biljeski
+--------------------------------------------------------------------------------
+- Who uses it: Admin only.
+- Logic Context: Loads a client's historical treatment file. The admin does not 
+  pass filters. Instead, the backend automatically performs internal table joins 
+  to compile and return a clean, chronological timeline ledger tracking when 
+  the note happened and what treatment it belonged to.
+
+- Backend Response (200 OK):
+[
+  {
+    "pocetak_tretmana": "2026-07-10T14:00:00Z",
+    "usluga_naziv": "Masaža Leđa",
+    "text": "Klijentica preferira crveni lak..."
+  }
+]
+
+4.3 POST /api/recenzije
+--------------------------------------------------------------------------------
+- Who uses it: Verified customers only.
+- Rules: Database uses a strict unique constraint on 'rezervacija_id' to block 
+  double-posting. You do NOT send 'klijent_id' in the body; the server automatically 
+  extracts it from the incoming secure JWT login token. 
+- Denormalization Optimization: Copies 'usluga_id' directly into the payload 
+  table (matching your ERDplus schema) to allow ultra-fast index grouping when 
+  public users browse feedback screens for a specific service.
+
+- Frontend Request Payload:
+{
+  "rezervacija_id": 320,
+  "usluga_id": 1,
+  "ocjena": 5,
+  "komentar": "Prezadovoljna uslugom, nokti traju tjednima!"
+}
+
+- Backend Response (201 Created):
+{
+  "status": "success",
+  "poruka": "Recenzija uspješno objavljena."
+}
+
+4.4 POST /api/listacekanja
+--------------------------------------------------------------------------------
+- Who uses it: Customers when their desired time slot is fully blocked out.
+- Rules: You do NOT send a 'klijent_id' in the body; it is safely pulled from the 
+  account token on the server. Uses full timestamps to specify the window bounds.
+
+- Frontend Request Payload:
+{
+  "usluga_id": 1,
+  "vrijeme_od": "2026-02-06T18:00:00Z",
+  "vrijeme_do": "2026-02-06T20:00:00Z"
+}
+
+- Backend Response (201 Created):
+{
+  "status": "success",
+  "poruka": "Uspješno ste dodani na listu čekanja. Obavijestit ćemo vas ako se oslobodi termin."
+}
+================================================================================
+
