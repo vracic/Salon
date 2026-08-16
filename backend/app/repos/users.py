@@ -14,7 +14,7 @@ async def create_korisnik_async(
     email: Optional[str],
     username: Optional[str],
     password_hash: str,
-):
+) -> dict:
     obj = Korisnik(
         ime=ime,
         prezime=prezime,
@@ -87,4 +87,52 @@ async def get_korisnik_by_id_async(session: AsyncSession, korisnik_id: int) -> O
         "email": row.email,
         "username": row.username,
         "rola_id": row.rola_id,
+    }
+
+
+async def create_klijent_async(
+    session: AsyncSession,
+    ime: str,
+    prezime: str,
+    broj_mobitela: str,
+    email: Optional[str] = None,
+) -> dict:
+    obj = Korisnik(
+        ime=ime,
+        prezime=prezime,
+        broj_mobitela=broj_mobitela,
+        email=email,
+        username=None,
+        password_hash=None,
+        rola_id=2,
+    )
+    session.add(obj)
+    await session.commit()
+    await session.refresh(obj)
+    return {
+        "id": obj.id,
+        "ime": obj.ime,
+        "prezime": obj.prezime,
+        "broj_mobitela": obj.broj_mobitela,
+        "email": obj.email,
+        "username": obj.username,
+        "rola_id": obj.rola_id,
+    }
+
+
+async def update_korisnik_rola_async(session: AsyncSession, korisnik_id: int, rola_id: int) -> dict:
+    row = await get_korisnik_by_id_async(session, korisnik_id)
+    if row is None:
+        raise ValueError("korisnik_not_found")
+
+    result = await session.execute(select(Korisnik).where(Korisnik.id == korisnik_id))
+    obj = result.scalar_one()
+    obj.rola_id = rola_id
+    await session.commit()
+    await session.refresh(obj)
+    return {
+        "id": obj.id,
+        "ime": obj.ime,
+        "prezime": obj.prezime,
+        "rola_id": obj.rola_id,
     }
