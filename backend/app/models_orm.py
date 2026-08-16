@@ -5,6 +5,13 @@ from sqlalchemy.orm import declarative_base
 Base = declarative_base()
 
 
+class Korisnickarola(Base):
+    __tablename__ = "korisnickarola"
+
+    id = Column(Integer, primary_key=True)
+    naziv = Column(String(50), nullable=False, unique=True)
+
+
 class Korisnik(Base):
     __tablename__ = "korisnici"
 
@@ -15,4 +22,4 @@ class Korisnik(Base):
     email = Column(String(255), unique=True)
     username = Column(String(100), unique=True)
     password_hash = Column(String(255))
-    rola_id = Column(Integer, ForeignKey("korisnickarola.id"), nullable=False)
+    rola_id = Column(Integer, ForeignKey("korisnickarola.id"), nullable=False, default=2)
